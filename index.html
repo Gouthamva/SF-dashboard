@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Leave Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+  <style>
+    body {
+      font-family: 'Roboto', sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen p-6">
+  <div class="max-w-7xl mx-auto bg-white rounded-lg shadow p-6">
+    <h1 class="text-3xl font-bold mb-6 text-center">Leave Dashboard</h1>
+
+    <div class="flex flex-wrap gap-6 mb-6 justify-center">
+      <div>
+        <label for="dateRange" class="block font-semibold mb-1">Date Range</label>
+        <select id="dateRange" class="border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="all">All Time</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div id="customDateInputs" class="hidden space-x-2 items-center">
+        <input type="date" id="startDate" class="border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <span>to</span>
+        <input type="date" id="endDate" class="border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      </div>
+      <div>
+        <label for="reasonFilter" class="block font-semibold mb-1">Filter by Reason</label>
+        <select id="reasonFilter" class="border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="all">All Reasons</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div>
+        <h2 class="text-xl font-semibold mb-2">Number of Absents by Employee</h2>
+        <canvas id="absentsByEmployeeChart"></canvas>
+      </div>
+      <div>
+        <h2 class="text-xl font-semibold mb-2">Absents Over Time</h2>
+        <canvas id="absentsOverTimeChart"></canvas>
+      </div>
+      <div class="md:col-span-2">
+        <h2 class="text-xl font-semibold mb-2">Leave Reasons Distribution</h2>
+        <canvas id="leaveReasonsChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-7xl mx-auto bg-white rounded-lg shadow p-6 mt-6">
+    <h2 class="text-xl font-semibold mb-4 text-center">Absents by Employee Summary</h2>
+    <table class="min-w-full border border-gray-300 rounded text-center">
+      <thead>
+        <tr class="bg-gray-100">
+          <th class="border border-gray-300 px-4 py-2">Employee</th>
+          <th class="border border-gray-300 px-4 py-2">Total Absents (Days)</th>
+        </tr>
+      </thead>
+      <tbody id="absentsSummaryBody">
+        <!-- Rows will be populated here -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Load Google Charts
+    google.charts.load('current', {'packages':['corechart']});
+
+    // Google Sheet ID and Sheet name
+    const spreadsheetId = '1-An9SeWtHzKiqPVR9zw50zEDSgn3udmMM57NerHmeJo';
+    const sheetName = 'Sheet1';
+
+    // Chart instances
+    let absentsByEmployeeChart, absentsOverTimeChart, leaveReasonsChart;
+
+    // Data storage
+    let rawData = [];
+
+    // Fetch data from Google Sheets using Google Visualization API
+    function fetchData() {
+      const queryString = encodeURIComponent(`SELECT *`);
+      const query = new google.visualization.Query(
+        `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?sheet=${sheetName}&tq=${queryString}`
+      );
+      query.send(handleQueryResponse);
+    }
+
+    // Handle data response
+    function handleQueryResponse(response) {
+      if (response.isError()) {
+        alert('Error fetching data from Google Sheets: ' + response.getMessage());
+        return;
+      }
+      const dataTable = response.getDataTable();
+      rawData = [];
+      for (let i = 0; i < dataTable.getNumberOfRows(); i++) {
+        rawData.push({
+          timestamp: dataTable.getValue(i, 0),
+          fullName: dataTable.getValue(i, 1),
+          reason: dataTable.getValue(i, 2),
+          days: dataTable.getValue(i, 3),
+          leaveDate: dataTable.getValue(i, 4),
+          dutyDate: dataTable.getValue(i, 5),
+          substitute: dataTable.getValue(i, 6)
+        });
+      }
+      populateReasonFilter();
+      updateDashboard();
+    }
+
+    // Populate reason filter options
+    function populateReasonFilter() {
+      const reasonFilter = document.getElementById('reasonFilter');
+      const reasons = new Set(rawData.map(d => d.reason));
+      reasons.forEach(reason => {
+        const option = document.createElement('option');
+        option.value = reason;
+        option.textContent = reason;
+        reasonFilter.appendChild(option);
+      });
+    }
+
+    // Filter data based on UI selections
+    function filterData() {
+      const dateRange = document.getElementById('dateRange').value;
+      const reasonFilter = document.getElementById('reasonFilter').value;
+      const startDateInput = document.getElementById('startDate').value;
+      const endDateInput = document.getElementById('endDate').value;
+
+      let filtered = rawData;
+
+      // Filter by reason
+      if (reasonFilter !== 'all') {
+        filtered = filtered.filter(d => d.reason === reasonFilter);
+      }
+
+      // Filter by date range
+      if (dateRange === 'monthly') {
+        const now = new Date();
+        filtered = filtered.filter(d => {
+          const leaveDate = new Date(d.leaveDate);
+          return leaveDate.getMonth() === now.getMonth() && leaveDate.getFullYear() === now.getFullYear();
+        });
+      } else if (dateRange === 'yearly') {
+        const now = new Date();
+        filtered = filtered.filter(d => {
+          const leaveDate = new Date(d.leaveDate);
+          return leaveDate.getFullYear() === now.getFullYear();
+        });
+      } else if (dateRange === 'custom') {
+        if (startDateInput && endDateInput) {
+          const start = new Date(startDateInput);
+          const end = new Date(endDateInput);
+          filtered = filtered.filter(d => {
+            const leaveDate = new Date(d.leaveDate);
+            return leaveDate >= start && leaveDate <= end;
+          });
+        }
+      }
+      return filtered;
+    }
+
+    // Aggregate data for charts
+    function aggregateData(filteredData) {
+      // Absents by employee
+      const absentsByEmployee = {};
+      filteredData.forEach(d => {
+        absentsByEmployee[d.fullName] = (absentsByEmployee[d.fullName] || 0) + parseInt(d.days, 10);
+      });
+
+      // Absents over time (monthly)
+      const absentsOverTime = {};
+      filteredData.forEach(d => {
+        const date = new Date(d.leaveDate);
+        const key = date.getFullYear() + '-' + (date.getMonth() + 1);
+        absentsOverTime[key] = (absentsOverTime[key] || 0) + parseInt(d.days, 10);
+      });
+
+      // Leave reasons distribution
+      const leaveReasons = {};
+      filteredData.forEach(d => {
+        leaveReasons[d.reason] = (leaveReasons[d.reason] || 0) + parseInt(d.days, 10);
+      });
+
+      return { absentsByEmployee, absentsOverTime, leaveReasons };
+    }
+
+    // Render charts
+    function renderCharts(aggregatedData) {
+      // Absents by Employee - Bar Chart
+      const ctx1 = document.getElementById('absentsByEmployeeChart').getContext('2d');
+      if (absentsByEmployeeChart) absentsByEmployeeChart.destroy();
+      absentsByEmployeeChart = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(aggregatedData.absentsByEmployee),
+          datasets: [{
+            label: 'Number of Absents',
+            data: Object.values(aggregatedData.absentsByEmployee).map(v => Math.round(v)),
+            backgroundColor: 'rgba(34,197,94,0.7)'
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+
+      // Absents Over Time - Line Chart
+      const ctx2 = document.getElementById('absentsOverTimeChart').getContext('2d');
+      if (absentsOverTimeChart) absentsOverTimeChart.destroy();
+      absentsOverTimeChart = new Chart(ctx2, {
+        type: 'line',
+        data: {
+          labels: Object.keys(aggregatedData.absentsOverTime),
+          datasets: [{
+            label: 'Number of Absents',
+            data: Object.values(aggregatedData.absentsOverTime).map(v => Math.round(v)),
+            borderColor: 'rgba(59,130,246,0.8)',
+            backgroundColor: 'rgba(59,130,246,0.3)',
+            fill: true,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+
+      // Leave Reasons Distribution - Pie Chart
+      const ctx3 = document.getElementById('leaveReasonsChart').getContext('2d');
+      if (leaveReasonsChart) leaveReasonsChart.destroy();
+      leaveReasonsChart = new Chart(ctx3, {
+        type: 'pie',
+        data: {
+          labels: Object.keys(aggregatedData.leaveReasons),
+          datasets: [{
+            label: 'Leave Reasons',
+            data: Object.values(aggregatedData.leaveReasons).map(v => Math.round(v)),
+            backgroundColor: [
+              'rgba(239,68,68,0.7)',
+              'rgba(234,179,8,0.7)',
+              'rgba(37,99,235,0.7)',
+              'rgba(16,185,129,0.7)',
+              'rgba(139,92,246,0.7)'
+            ]
+          }]
+        },
+        options: {
+          responsive: true
+        }
+      });
+    }
+
+    // Update dashboard charts based on filters
+    function updateDashboard() {
+      const filteredData = filterData();
+      const aggregatedData = aggregateData(filteredData);
+      renderCharts(aggregatedData);
+      populateAbsentsSummary(aggregatedData.absentsByEmployee);
+    }
+
+    // Populate absents summary table
+    function populateAbsentsSummary(absentsByEmployee) {
+      const tbody = document.getElementById('absentsSummaryBody');
+      tbody.innerHTML = '';
+      Object.entries(absentsByEmployee).forEach(([employee, days]) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="border border-gray-300 px-4 py-2">${employee}</td>
+          <td class="border border-gray-300 px-4 py-2">${Math.round(days)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Event listeners for filters
+    document.getElementById('dateRange').addEventListener('change', function() {
+      const customDateInputs = document.getElementById('customDateInputs');
+      if (this.value === 'custom') {
+        customDateInputs.classList.remove('hidden');
+      } else {
+        customDateInputs.classList.add('hidden');
+      }
+      updateDashboard();
+    });
+
+    document.getElementById('reasonFilter').addEventListener('change', updateDashboard);
+    document.getElementById('startDate').addEventListener('change', updateDashboard);
+    document.getElementById('endDate').addEventListener('change', updateDashboard);
+
+    // Initialize
+    google.charts.setOnLoadCallback(fetchData);
+  </script>
+</body>
+</html>
